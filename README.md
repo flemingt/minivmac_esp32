@@ -1,11 +1,4 @@
-VIDEO follows ...
-
-![Case](docs/images/Case.jpeg)
-![InfoDialog](docs/images/MacInfo.jpeg)
-
 This is a Mini vMac port for the ESP32-S3, adapted in this working copy for the Guition ESP32-S3-4848S040 4-inch 480x480 panel. The panel uses an ST7701 RGB display and GT911 capacitive touch controller. The emulator image is scaled to fit the square display, and touch controls the emulated mouse.
-
-The case you see in the pictures is by Jeroen Domburg from his minimacplus project (https://github.com/Spritetm/minimacplus).
 
 Usage:
 - The sources must be compiled with the IDF from Espressif (version 5.5). (idf.py build).
