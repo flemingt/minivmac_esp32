@@ -3,7 +3,7 @@ VIDEO follows ...
 ![Case](docs/images/Case.jpeg)
 ![InfoDialog](docs/images/MacInfo.jpeg)
 
-This is a port of the minivmac project to an ESP32S3. minivmac (https://www.gryphel.com/c/minivmac/) is a Macintosh emulator for early Macs. The emulator was ported to an ESP32S3 board with a display from Waveshare (https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.8B). The port works very well and is fast enough to actually use the Mac, if it weren't for the very small display. 2.8 inches is very small, and you need very good eyes to see everything. 
+This is a Mini vMac port for the ESP32-S3, adapted in this working copy for the Guition ESP32-S3-4848S040 4-inch 480x480 panel. The panel uses an ST7701 RGB display and GT911 capacitive touch controller. The emulator image is scaled to fit the square display, and touch controls the emulated mouse.
 
 The case you see in the pictures is by Jeroen Domburg from his minimacplus project (https://github.com/Spritetm/minimacplus).
 
@@ -17,6 +17,4 @@ Usage:
 
 Mouse and keyboard:
 
-The mouse and keyboard inputs are made via Bluetooth. Unfortunately, the ESP32S3 cannot use classic Bluetooth, only BLE. However, since I don't have any BLE mice or keyboards, the support was solved a little differently. I use a cheap ESP32 (not S3) board and run firmware on it that connects to all HID input devices in the vicinity (they must be in pairing mode to start). Once the devices are connected, all HID events (i.e., all mouse movements or keyboard inputs) are output via the serial interface (UART). This ESP32 board is connected to the Waveshare display via UART (4 cables) (GND -> GND, 3.3V -> 3.3V, ESP32 RX -> ESP32 TX, and ESP32 TX -> ESP32 RX). The ESP32 receives the data from the ESP32 and forwards it to the emulator (see the process in the video). 
-
-The Bluetooth firmware for the ESP32 is located in a separate project (https://github.com/uliuc/esp32_bluetooth_host_hid_to_uart). You must compile this project and install it on the ESP32. Then connect it to the Waveshare board via UART. However, make sure to either adjust the names of the Bluetooth devices to be connected (in the sources, file esp_hid_host_main.c) or disable the CONFIG_BT_HID_HOST_ENABLED option. 
+The GT911 touchscreen provides mouse movement and left-click input. Keyboard input is not implemented in this Guition adaptation. The board's USB-C connector is wired to a CH340 USB-to-serial bridge for programming and power; it is not connected as a USB host port, so a USB hub cannot attach a keyboard or mouse to the ESP32-S3. Use a separate BLE HID implementation or an external input bridge for keyboard support.

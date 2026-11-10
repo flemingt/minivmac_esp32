@@ -1,10 +1,9 @@
 idf_component_register(
     SRCS "MINIVMACESP32.c"
-	 "TCA9554PWR.c"
 	 "ESP32API.c"
 	 "OSGLUESP32.c"
     INCLUDE_DIRS "." "../components/minivmac_allarchs"
-    PRIV_REQUIRES spiffs esp_timer esp_lcd)
+	PRIV_REQUIRES spiffs esp_timer esp_lcd driver)
 
 spiffs_create_partition_image(spiffs ${CMAKE_CURRENT_LIST_DIR}/../spiffs FLASH_IN_PROJECT)
 

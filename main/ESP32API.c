@@ -28,6 +28,7 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "esp_lv_adapter.h"
+#include "driver/i2c.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 
@@ -46,6 +47,8 @@ static int g_mouse_dx = 0;
 static int g_mouse_dy = 0;
 static uint8_t g_mouse_buttons = 0;
 static bool mouse_btn_state = false;
+static int g_em_mouse_x = 256;
+static int g_em_mouse_y = 171;
 
 static SemaphoreHandle_t g_mouse_mutex;
 static SemaphoreHandle_t upd_area_mutex = NULL;
@@ -307,16 +310,27 @@ void mousekeyboard_task(void *arg)
 // mac display size
 #define EMU_WIDTH   512
 #define EMU_HEIGHT  342
-#define SCREEN_WIDTH 640
+#define SCREEN_WIDTH 480
 #define SCREEN_HEIGHT 480
-#define X_OFF (SCREEN_WIDTH - EMU_WIDTH)/2
-#define Y_OFF (SCREEN_HEIGHT - EMU_HEIGHT)/2
+#define DISPLAY_WIDTH SCREEN_WIDTH
+#define DISPLAY_HEIGHT ((EMU_HEIGHT * SCREEN_WIDTH) / EMU_WIDTH)
+#define X_OFF 0
+#define Y_OFF ((SCREEN_HEIGHT - DISPLAY_HEIGHT) / 2)
+
+#define GT911_I2C_PORT I2C_NUM_0
+#define GT911_I2C_ADDRESS 0x5D
+#define GT911_STATUS_REGISTER 0x814E
+#define GT911_POINT_REGISTER (GT911_STATUS_REGISTER + 1)
 
 static SemaphoreHandle_t newframe_sem = NULL;
 const uint8_t* mac_fb = NULL;
 static lv_color_t *emu_buf;
 static lv_img_dsc_t emu_img_dsc;
 static lv_obj_t *emu_img; 
+static bool first_mac_frame_logged = false;
+static bool first_display_wake_logged = false;
+static bool first_display_lock_logged = false;
+static bool first_display_update_logged = false;
 
 // lookup-table
 uint16_t lut[256][8]; // 256 Bytes for 8 Pixel each
@@ -328,7 +342,89 @@ static int upd_area_r = EMU_WIDTH/2;
 static int upd_area_b = EMU_HEIGHT/2;
 static int update_event_count = 0;
 
+static esp_err_t gt911_read(uint16_t reg, uint8_t *data, size_t length)
+{
+    uint8_t address[2] = { (uint8_t)(reg >> 8), (uint8_t)reg };
+    return i2c_master_write_read_device(GT911_I2C_PORT, GT911_I2C_ADDRESS,
+                                        address, sizeof(address), data, length,
+                                        pdMS_TO_TICKS(20));
+}
+
+static esp_err_t gt911_clear_status(void)
+{
+    uint8_t command[3] = {
+        (uint8_t)(GT911_STATUS_REGISTER >> 8),
+        (uint8_t)GT911_STATUS_REGISTER,
+        0
+    };
+    return i2c_master_write_to_device(GT911_I2C_PORT, GT911_I2C_ADDRESS,
+                                      command, sizeof(command),
+                                      pdMS_TO_TICKS(20));
+}
+
+static void touch_mouse_task(void *arg)
+{
+    (void)arg;
+    bool previous_touch = false;
+    int previous_x = 0;
+    int previous_y = 0;
+
+    while (true) {
+        uint8_t status = 0;
+        if (gt911_read(GT911_STATUS_REGISTER, &status, 1) == ESP_OK &&
+            (status & 0x80) != 0) {
+            uint8_t point[8] = {0};
+            uint8_t point_count = status & 0x0F;
+            bool valid_point = point_count > 0 && point_count <= 5 &&
+                               gt911_read(GT911_POINT_REGISTER, point,
+                                          sizeof(point)) == ESP_OK;
+
+            if (valid_point) {
+                int touch_x = (int)point[1] | ((int)point[2] << 8);
+                int touch_y = (int)point[3] | ((int)point[4] << 8);
+                bool inside_mac_screen = touch_x < SCREEN_WIDTH &&
+                                         touch_y >= Y_OFF &&
+                                         touch_y < Y_OFF + DISPLAY_HEIGHT;
+
+                if (inside_mac_screen) {
+                    int mac_x = touch_x * EMU_WIDTH / DISPLAY_WIDTH;
+                    int mac_y = (touch_y - Y_OFF) * EMU_HEIGHT / DISPLAY_HEIGHT;
+
+                    if (xSemaphoreTake(g_mouse_mutex, portMAX_DELAY)) {
+                        int base_x = previous_touch ? previous_x : g_em_mouse_x;
+                        int base_y = previous_touch ? previous_y : g_em_mouse_y;
+                        g_mouse_dx += mac_x - base_x;
+                        g_mouse_dy += mac_y - base_y;
+                        g_mouse_buttons = 1;
+                        xSemaphoreGive(g_mouse_mutex);
+                    }
+                    previous_x = mac_x;
+                    previous_y = mac_y;
+                    previous_touch = true;
+                } else {
+                    previous_touch = false;
+                    if (xSemaphoreTake(g_mouse_mutex, portMAX_DELAY)) {
+                        g_mouse_buttons = 0;
+                        xSemaphoreGive(g_mouse_mutex);
+                    }
+                }
+            } else {
+                previous_touch = false;
+                if (xSemaphoreTake(g_mouse_mutex, portMAX_DELAY)) {
+                    g_mouse_buttons = 0;
+                    xSemaphoreGive(g_mouse_mutex);
+                }
+            }
+
+            gt911_clear_status();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
 void display_task(void* Param) {
+    ESP_LOGI(TAG, "Display task started; newframe semaphore=%p", newframe_sem);
 
     while (true) {
       
@@ -338,6 +434,12 @@ void display_task(void* Param) {
         if (xSemaphoreTake(newframe_sem, portMAX_DELAY) != pdTRUE) {
                 ESP32API_Yield();
                 continue;
+        }
+
+        if (!first_display_wake_logged) {
+            ESP_LOGI(TAG, "Display task received frame: fb=%p, canvas=%p, image=%p",
+                 mac_fb, emu_buf, emu_img);
+            first_display_wake_logged = true;
         }
       
         // this is for full frame update
@@ -399,59 +501,58 @@ void display_task(void* Param) {
                 xSemaphoreGive(upd_area_mutex);
             }
         
-            // alignment to full bytes for x1 and x2
-            int x1_al = x1 & ~7;
-            int x2_al = (x2 + 7) & ~7;
-        
-            // save boundaries
+            // Clamp the changed Mac region before scaling it to the panel.
             if (y1 < 0) y1 = 0;
             if (y2 >= EMU_HEIGHT) y2 = EMU_HEIGHT - 1;
-            if (x1_al < 0 ) x1_al = 0;
-            if (x2_al >= EMU_WIDTH) x2_al = EMU_WIDTH;
-                    
-            int b_max = (x2_al - x1_al) >> 3;
-            if (b_max < 0 ) b_max = 0;        
-                    
-            // convert frame buffer
-            for (int y = y1; y <= y2; y++) {
-        
-                const uint8_t* src = mac_fb + y * (EMU_WIDTH / 8) + x1_al/8;
-                lv_color_t* dst = &dst_fb[y * EMU_WIDTH + x1_al];
-        
-                for (int bx = 0; bx < b_max; bx++) {
-        
-                    const uint8_t b = src[bx];
-                    const uint16_t* p = lut[b];    // 8 RGB565 pixel
-        
-                    dst[0].full = p[0];
-                    dst[1].full = p[1];
-                    dst[2].full = p[2];
-                    dst[3].full = p[3];
-                    dst[4].full = p[4];
-                    dst[5].full = p[5];
-                    dst[6].full = p[6];
-                    dst[7].full = p[7];
-        
-                    dst += 8;
+            if (x1 < 0) x1 = 0;
+            if (x2 >= EMU_WIDTH) x2 = EMU_WIDTH - 1;
+
+            int x1_scaled = x1 * DISPLAY_WIDTH / EMU_WIDTH;
+            int x2_scaled = ((x2 + 1) * DISPLAY_WIDTH + EMU_WIDTH - 1) / EMU_WIDTH - 1;
+            int y1_scaled = y1 * DISPLAY_HEIGHT / EMU_HEIGHT;
+            int y2_scaled = ((y2 + 1) * DISPLAY_HEIGHT + EMU_HEIGHT - 1) / EMU_HEIGHT - 1;
+
+            for (int y = y1_scaled; y <= y2_scaled; y++) {
+                int source_y = y * EMU_HEIGHT / DISPLAY_HEIGHT;
+                lv_color_t *dst = &dst_fb[y * DISPLAY_WIDTH + x1_scaled];
+
+                for (int x = x1_scaled; x <= x2_scaled; x++) {
+                    int source_x = x * EMU_WIDTH / DISPLAY_WIDTH;
+                    uint8_t source_byte = mac_fb[source_y * (EMU_WIDTH / 8) + source_x / 8];
+                    dst->full = lut[source_byte][source_x & 7];
+                    dst++;
                 }
             }
         
             // invalidate area
             lv_area_t area;
-            area.x1 = x1_al + X_OFF;
-            area.x2 = x2_al + X_OFF -1;
-            area.y1 = y1 + Y_OFF;
-            area.y2 = y2 + Y_OFF -1;
+            area.x1 = x1_scaled + X_OFF;
+            area.x2 = x2_scaled + X_OFF;
+            area.y1 = y1_scaled + Y_OFF;
+            area.y2 = y2_scaled + Y_OFF;
+
+            if (!first_display_lock_logged) {
+                ESP_LOGI(TAG, "Updating Mac image area (%d,%d)-(%d,%d)",
+                         area.x1, area.y1, area.x2, area.y2);
+            }
             
             ESP_LOGD(TAG, "X1: %d, Y1: %d, X2: %d, Y2: %d", area.x1, area.y1, area.x2, area.y2);
         
             esp_lv_adapter_lock(-1);
+            if (!first_display_lock_logged) {
+                ESP_LOGI(TAG, "LVGL lock acquired for Mac image");
+                first_display_lock_logged = true;
+            }
             lv_obj_invalidate_area(emu_img, &area);
             lv_refr_now(NULL);
             esp_lv_adapter_unlock();
+
+            if (!first_display_update_logged) {
+                ESP_LOGI(TAG, "Rendered first Mac framebuffer update");
+                first_display_update_logged = true;
+            }
         
-            // wait for vsync
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            vTaskDelay(pdMS_TO_TICKS(16));
         }
     }
 }
@@ -468,26 +569,33 @@ void create_1bpp_loopup_table() {
 
 void lvgl_emubuffer_init()
 {
-    emu_buf = (lv_color_t *)malloc(EMU_WIDTH * EMU_HEIGHT * sizeof(lv_color_t));
-    memset(emu_buf, 0xff, EMU_WIDTH * EMU_HEIGHT * sizeof(lv_color_t));
+    emu_buf = (lv_color_t *)malloc(DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(lv_color_t));
 
-    if (!emu_buf)
+    if (!emu_buf) {
         ESP_LOGE(TAG, "could not initialize emu buffer");
+        return;
+    }
+    memset(emu_buf, 0xff, DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(lv_color_t));
 
     emu_img_dsc.header.always_zero = 0;
-    emu_img_dsc.header.w = EMU_WIDTH;
-    emu_img_dsc.header.h = EMU_HEIGHT;
+    emu_img_dsc.header.w = DISPLAY_WIDTH;
+    emu_img_dsc.header.h = DISPLAY_HEIGHT;
     emu_img_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;          // RGB565
     emu_img_dsc.data = (const uint8_t *)emu_buf;
-    emu_img_dsc.data_size = EMU_WIDTH * EMU_HEIGHT * sizeof(lv_color_t);
+    emu_img_dsc.data_size = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(lv_color_t);
 
+    esp_lv_adapter_lock(-1);
     emu_img = lv_img_create(lv_scr_act());
-    if (!emu_img)
+    if (!emu_img) {
+        esp_lv_adapter_unlock();
         ESP_LOGE(TAG, "could not initialize emu image");
-        
+        return;
+    }
+
     lv_img_set_src(emu_img, &emu_img_dsc);
     lv_obj_set_style_opa(emu_img, LV_OPA_COVER, 0);
-    lv_obj_set_pos(emu_img, X_OFF, Y_OFF);       
+    lv_obj_set_pos(emu_img, X_OFF, Y_OFF);
+    esp_lv_adapter_unlock();
 }
 
 void init_vmacmini_esp32() {
@@ -522,22 +630,27 @@ void init_vmacmini_esp32() {
   
     // new frame semaphore
     newframe_sem = xSemaphoreCreateBinary();
+    ESP_LOGI(TAG, "Created newframe semaphore=%p", newframe_sem);
     
     // update area mutex
     upd_area_mutex = xSemaphoreCreateMutex();
     
-    // init uart to receive keyboard and mouse data
-    ESP_LOGI(TAG, "initializing bluetooth mouse and keyboard");
-    hid_link_uart_init_rx(UART_NUM_1, GPIO_NUM_43, GPIO_NUM_44, 921600);
-    
-    // start mouse and keyboard task
-    xTaskCreate(mousekeyboard_task, "mousekeyboard_task", 4096, NULL, 10, NULL);
+    g_mouse_mutex = xSemaphoreCreateMutex();
+    if (g_mouse_mutex) {
+        ESP_LOGI(TAG, "starting GT911 touch mouse");
+        xTaskCreate(touch_mouse_task, "touch_mouse_task", 4096, NULL, 10, NULL);
+    } else {
+        ESP_LOGE(TAG, "touch mouse mutex creation failed");
+    }
  }
 
 void ESP32API_GetMouseDelta(int* dx, int* dy) {
 
     *dx = 0;
     *dy = 0;
+
+    if (!g_mouse_mutex)
+        return;
 
     if (xSemaphoreTake(g_mouse_mutex, portMAX_DELAY)) {
         *dx = g_mouse_dx;
@@ -555,7 +668,14 @@ void ESP32API_GetMouseDelta(int* dx, int* dy) {
 }
 
 void ESP32API_GiveEmulatedMouseToESP32(int* EmMouseX, int* EmMouseY) {
-  // not used
+    if (!g_mouse_mutex || !EmMouseX || !EmMouseY)
+        return;
+
+    if (xSemaphoreTake(g_mouse_mutex, portMAX_DELAY)) {
+        g_em_mouse_x = *EmMouseX;
+        g_em_mouse_y = *EmMouseY;
+        xSemaphoreGive(g_mouse_mutex);
+    }
 }
 
 int ESP32API_GetMouseButton(void) {
@@ -686,6 +806,15 @@ void ESP32API_DrawScreen(const uint8_t* new_fb) {
         mac_fb = new_fb;
         Changed = false;
 
-        xSemaphoreGive(newframe_sem);
+        if (!first_mac_frame_logged) {
+            ESP_LOGI(TAG, "Received first Mac framebuffer update: fb=%p, semaphore=%p",
+                     new_fb, newframe_sem);
+            first_mac_frame_logged = true;
+        }
+
+        BaseType_t given = xSemaphoreGive(newframe_sem);
+        if (first_mac_frame_logged && given != pdTRUE) {
+            ESP_LOGW(TAG, "Could not signal display task for Mac framebuffer");
+        }
     }
 }

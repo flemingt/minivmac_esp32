@@ -29,54 +29,55 @@
 #include "esp_lcd_st7701.h"
 
 #include "esp_lv_adapter.h"
-#include "TCA9554PWR.h"
 #include "ESP32API.h"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///               LCD spec for waveshare ESP32-S3 2.8 480x640                  //////////////////////////////
+///               Guition ESP32-S3-4848S040 LCD configuration                  //////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define LCD_H_RES               480
-#define LCD_V_RES               640
+#define LCD_V_RES               480
 #define LCD_BIT_PER_PIXEL       18
 #define RGB_BIT_PER_PIXEL       16
 #define RGB_DATA_WIDTH          16
 #define RGB_BOUNCE_BUFFER_SIZE  LCD_H_RES * 10
 #define LCD_IO_RGB_DISP         -1             // -1 if not used
-#define LCD_IO_RGB_VSYNC        GPIO_NUM_39
-#define LCD_IO_RGB_HSYNC        GPIO_NUM_38
-#define LCD_IO_RGB_DE           GPIO_NUM_40
-#define LCD_IO_RGB_PCLK         GPIO_NUM_41
-#define LCD_IO_RGB_DATA0        GPIO_NUM_5
-#define LCD_IO_RGB_DATA1        GPIO_NUM_45
-#define LCD_IO_RGB_DATA2        GPIO_NUM_48
-#define LCD_IO_RGB_DATA3        GPIO_NUM_47
-#define LCD_IO_RGB_DATA4        GPIO_NUM_21
-#define LCD_IO_RGB_DATA5        GPIO_NUM_14
-#define LCD_IO_RGB_DATA6        GPIO_NUM_13
-#define LCD_IO_RGB_DATA7        GPIO_NUM_12
-#define LCD_IO_RGB_DATA8        GPIO_NUM_11
-#define LCD_IO_RGB_DATA9        GPIO_NUM_10
-#define LCD_IO_RGB_DATA10       GPIO_NUM_9
-#define LCD_IO_RGB_DATA11       GPIO_NUM_46
-#define LCD_IO_RGB_DATA12       GPIO_NUM_3
-#define LCD_IO_RGB_DATA13       GPIO_NUM_8
-#define LCD_IO_RGB_DATA14       GPIO_NUM_18
-#define LCD_IO_RGB_DATA15       GPIO_NUM_17
-#define LCD_IO_SPI_CS           -1           // not used, CS over IO extender chip
-#define LCD_IO_SPI_SCL          GPIO_NUM_2
-#define LCD_IO_SPI_SDA          GPIO_NUM_1
-#define LCD_IO_RST              -1           // not used, RST over IO extender chip
-#define PIN_NUM_BK_LIGHT        GPIO_NUM_6
+#define LCD_IO_RGB_VSYNC        GPIO_NUM_17
+#define LCD_IO_RGB_HSYNC        GPIO_NUM_16
+#define LCD_IO_RGB_DE           GPIO_NUM_18
+#define LCD_IO_RGB_PCLK         GPIO_NUM_21
+#define LCD_IO_RGB_DATA0        GPIO_NUM_11      // B0
+#define LCD_IO_RGB_DATA1        GPIO_NUM_12      // B1
+#define LCD_IO_RGB_DATA2        GPIO_NUM_13      // B2
+#define LCD_IO_RGB_DATA3        GPIO_NUM_14      // B3
+#define LCD_IO_RGB_DATA4        GPIO_NUM_0       // B4
+#define LCD_IO_RGB_DATA5        GPIO_NUM_8       // G0
+#define LCD_IO_RGB_DATA6        GPIO_NUM_20      // G1
+#define LCD_IO_RGB_DATA7        GPIO_NUM_3       // G2
+#define LCD_IO_RGB_DATA8        GPIO_NUM_46      // G3
+#define LCD_IO_RGB_DATA9        GPIO_NUM_9       // G4
+#define LCD_IO_RGB_DATA10       GPIO_NUM_10      // G5
+#define LCD_IO_RGB_DATA11       GPIO_NUM_4       // R0
+#define LCD_IO_RGB_DATA12       GPIO_NUM_5       // R1
+#define LCD_IO_RGB_DATA13       GPIO_NUM_6       // R2
+#define LCD_IO_RGB_DATA14       GPIO_NUM_7       // R3
+#define LCD_IO_RGB_DATA15       GPIO_NUM_15      // R4
+#define LCD_IO_SPI_CS           GPIO_NUM_39
+#define LCD_IO_SPI_SCL          GPIO_NUM_48
+#define LCD_IO_SPI_SDA          GPIO_NUM_47
+#define LCD_IO_RST              -1
+#define PIN_NUM_BK_LIGHT        GPIO_NUM_38
 #define LCD_BK_LIGHT_ON_LEVEL   1
 #define LCD_BK_LIGHT_OFF_LEVEL  !LCD_BK_LIGHT_ON_LEVEL
-#define LCD_PIXEL_CLOCK_HZ      (18 * 1000 * 1000)
+#define LCD_PIXEL_CLOCK_HZ      (12 * 1000 * 1000)
 
 // rotation
-#define CONFIG_LCD_ROTATION     ESP_LV_ADAPTER_ROTATE_90
+#define CONFIG_LCD_ROTATION     ESP_LV_ADAPTER_ROTATE_0
 
 // i2c pins
-#define PIN_SCL                 GPIO_NUM_7
-#define PIN_SDA                 GPIO_NUM_15
+#define PIN_SCL                 GPIO_NUM_45
+#define PIN_SDA                 GPIO_NUM_19
+#define I2C_MASTER_NUM          I2C_NUM_0
+#define I2C_MASTER_FREQ_HZ      100000
 
 // frame buffer size
 #define EMU_WIDTH   512
@@ -84,82 +85,48 @@
 
 static const char *TAG = "MINIVMACESP32";
 
-// lcd init sequence: from waveshare wiki (example code)
+// Guition ESP32-S3-4848S040 ST7701 initialization
 static const st7701_lcd_init_cmd_t lcd_init_cmds[] = {
     //  {cmd, { data }, data_size, delay_ms}
-    {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x13}, 5, 0},
-    {0xEF, (uint8_t []){0x08}, 1, 0},
     {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x10}, 5, 0},
-    {0xC0, (uint8_t []){0x4F, 0x00}, 2, 0},
-    {0xC1, (uint8_t []){0x10, 0x02}, 2, 0},
-    {0xC2, (uint8_t []){0x07, 0x02}, 2, 0},
-    {0xCC, (uint8_t []){0x10}, 1, 0},
-    {0xB0, (uint8_t []){0x00, 0x10, 0x17, 0x0D, 0x11, 0x06, 0x05, 0x08, 0x07, 0x1F, 0x04, 0x11, 0x0E, 0x29, 0x30, 0x1F}, 16, 0},
-    {0xB1, (uint8_t []){0x00, 0x0D, 0x14, 0x0E, 0x11, 0x06, 0x04, 0x08, 0x08, 0x20, 0x05, 0x13, 0x13, 0x26, 0x30, 0x1F}, 16, 0},
+    {0xC0, (uint8_t []){0x3B, 0x00}, 2, 0},
+    {0xC1, (uint8_t []){0x0D, 0x02}, 2, 0},
+    {0xC2, (uint8_t []){0x31, 0x05}, 2, 0},
+    {0xCD, (uint8_t []){0x00}, 1, 0},
+    {0xB0, (uint8_t []){0x00, 0x11, 0x18, 0x0E, 0x11, 0x06, 0x07, 0x08, 0x07, 0x22, 0x04, 0x12, 0x0F, 0xAA, 0x31, 0x18}, 16, 0},
+    {0xB1, (uint8_t []){0x00, 0x11, 0x19, 0x0E, 0x12, 0x07, 0x08, 0x08, 0x08, 0x22, 0x04, 0x11, 0x11, 0xA9, 0x32, 0x18}, 16, 0},
     {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x11}, 5, 0},
-    {0xB0, (uint8_t []){0x65}, 1, 0},
-    {0xB1, (uint8_t []){0x71}, 1, 0},
-    {0xB2, (uint8_t []){0x82}, 1, 0},
+    {0xB0, (uint8_t []){0x60}, 1, 0},
+    {0xB1, (uint8_t []){0x32}, 1, 0},
+    {0xB2, (uint8_t []){0x07}, 1, 0},
     {0xB3, (uint8_t []){0x80}, 1, 0},
-    {0xB5, (uint8_t []){0x42}, 1, 0},
+    {0xB5, (uint8_t []){0x49}, 1, 0},
     {0xB7, (uint8_t []){0x85}, 1, 0},
-    {0xB8, (uint8_t []){0x20}, 1, 0},
-    {0xC0, (uint8_t []){0x09}, 1, 0},
+    {0xB8, (uint8_t []){0x21}, 1, 0},
     {0xC1, (uint8_t []){0x78}, 1, 0},
     {0xC2, (uint8_t []){0x78}, 1, 0},
-    {0xD0, (uint8_t []){0x88}, 1, 0},
-    {0xEE, (uint8_t []){0x42}, 1, 0},
-
-    {0xE0, (uint8_t []){0x00, 0x00, 0x02}, 3, 0},
-    {0xE1, (uint8_t []){0x04, 0xA0, 0x06, 0xA0, 0x05, 0xA0, 0x07, 0xA0, 0x00, 0x44, 0x44}, 11, 0},
-    {0xE2, (uint8_t []){0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 12, 0},
-    {0xE3, (uint8_t []){0x00, 0x00, 0x22, 0x22}, 4, 0},
+    {0xE0, (uint8_t []){0x00, 0x1B, 0x02}, 3, 0},
+    {0xE1, (uint8_t []){0x08, 0xA0, 0x00, 0x00, 0x07, 0xA0, 0x00, 0x00, 0x00, 0x44, 0x44}, 11, 0},
+    {0xE2, (uint8_t []){0x11, 0x11, 0x44, 0x44, 0xED, 0xA0, 0x00, 0x00, 0xEC, 0xA0, 0x00, 0x00}, 12, 0},
+    {0xE3, (uint8_t []){0x00, 0x00, 0x11, 0x11}, 4, 0},
     {0xE4, (uint8_t []){0x44, 0x44}, 2, 0},
-    {0xE5, (uint8_t []){0x0C, 0x90, 0xA0, 0xA0, 0x0E, 0x92, 0xA0, 0xA0, 0x08, 0x8C, 0xA0, 0xA0, 0x0A, 0x8E, 0xA0, 0xA0}, 16, 0},
-    {0xE6, (uint8_t []){0x00, 0x00, 0x22, 0x22}, 4, 0},
+    {0xE5, (uint8_t []){0x0A, 0xE9, 0xD8, 0xA0, 0x0C, 0xEB, 0xD8, 0xA0, 0x0E, 0xED, 0xD8, 0xA0, 0x10, 0xEF, 0xD8, 0xA0}, 16, 0},
+    {0xE6, (uint8_t []){0x00, 0x00, 0x11, 0x11}, 4, 0},
     {0xE7, (uint8_t []){0x44, 0x44}, 2, 0},
-    {0xE8, (uint8_t []){0x0D, 0x91, 0xA0, 0xA0, 0x0F, 0x93, 0xA0, 0xA0, 0x09, 0x8D, 0xA0, 0xA0, 0x0B, 0x8F, 0xA0, 0xA0}, 16, 0},
-    {0xEB, (uint8_t []){0x00, 0x00, 0xE4, 0xE4, 0x44, 0x00, 0x40}, 7, 0},
-    {0xED, (uint8_t []){0xFF, 0xF5, 0x47, 0x6F, 0x0B, 0xA1, 0xAB, 0xFF, 0xFF, 0xBA, 0x1A, 0xB0, 0xF6, 0x74, 0x5F, 0xFF}, 16, 0},
-    {0xEF, (uint8_t []){0x08, 0x08, 0x08, 0x40, 0x3F, 0x64}, 6, 0},
-
-    {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x00}, 5, 0},
+    {0xE8, (uint8_t []){0x09, 0xE8, 0xD8, 0xA0, 0x0B, 0xEA, 0xD8, 0xA0, 0x0D, 0xEC, 0xD8, 0xA0, 0x0F, 0xEE, 0xD8, 0xA0}, 16, 0},
+    {0xEB, (uint8_t []){0x02, 0x00, 0xE4, 0xE4, 0x88, 0x00, 0x40}, 7, 0},
+    {0xEC, (uint8_t []){0x3C, 0x00}, 2, 0},
+    {0xED, (uint8_t []){0xAB, 0x89, 0x76, 0x54, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x20, 0x45, 0x67, 0x98, 0xBA}, 16, 0},
     {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x13}, 5, 0},
-    {0xE6, (uint8_t []){0x16, 0x7C}, 2, 0},
-    {0xE8, (uint8_t []){0x00, 0x0E}, 2, 0},
+    {0xE5, (uint8_t []){0xE4}, 1, 0},
     {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x00}, 5, 0},
-    {0x11, (uint8_t []){0x00}, 0, 200},
-    {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x13}, 5, 0},
-    {0xE8, (uint8_t []){0x00, 0x0C}, 2, 150},
-    {0xE8, (uint8_t []){0x00, 0x00}, 2, 0},
-    {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x00}, 5, 0},
+    {0x3A, (uint8_t []){0x60}, 1, 10},
+    {0x11, (uint8_t []){0x00}, 0, 120},
     {0x29, (uint8_t []){0x00}, 0, 0},
-    {0x35, (uint8_t []){0x00}, 0, 0},
-    {0x11, (uint8_t []){0x00}, 0, 200},
-    {0x29, (uint8_t []){0x00}, 0, 100},
 };
-
-// reset and chip select IO extender
-// from waveshare example
-esp_err_t ST7701S_reset(void)
-{
-    Set_EXIO(TCA9554_EXIO1,false);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    Set_EXIO(TCA9554_EXIO1,true);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    return ESP_OK;
-}
-
-esp_err_t ST7701S_CS_EN(void)
-{
-    Set_EXIO(TCA9554_EXIO3,false);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    return ESP_OK;
-}
 
 // in ESP32API.c   
 extern void display_task(void* Param);
-static TaskHandle_t display_task_hdl = NULL;
    
 // starts minivmac in his own task
 static void emulator_task(void *param)
@@ -168,16 +135,6 @@ static void emulator_task(void *param)
     vTaskDelete(NULL);
 }   
    
-// vsync
-static bool IRAM_ATTR panel_vsync_cb(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t *edata,
-void *user_data)
-{
-    BaseType_t hpw = pdFALSE;
-    TaskHandle_t h = (TaskHandle_t)user_data;
-    if (h) vTaskNotifyGiveFromISR(h, &hpw);
-        return (hpw == pdTRUE);
-}
-
 // main
 void app_main()
 {
@@ -195,17 +152,6 @@ void app_main()
     i2c_param_config(I2C_MASTER_NUM, &conf);
     i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
     
-    // initialize the IO extender, used to reset and cs the display
-    EXIO_Init();
-    
-    // buzzer off, display has a buzzer, which will be turned on
-    Set_EXIO(TCA9554_EXIO8,false); 
-    
-    // display reset and chip select
-    ST7701S_reset();
-    ST7701S_CS_EN();
-    vTaskDelay(pdMS_TO_TICKS(100));
-
 #if PIN_NUM_BK_LIGHT >= 0
     ESP_LOGI(TAG, "Turn off LCD backlight");
     gpio_config_t bk_gpio_config = {
@@ -219,7 +165,7 @@ void app_main()
     ESP_LOGI(TAG, "Install 3-wire SPI panel IO");
     spi_line_config_t line_config = {
         .cs_io_type = IO_TYPE_GPIO,
-        //.cs_gpio_num = LCD_IO_SPI_CS, // not used
+        .cs_gpio_num = LCD_IO_SPI_CS,
         .scl_io_type = IO_TYPE_GPIO,
         .scl_gpio_num = LCD_IO_SPI_SCL,
         .sda_io_type = IO_TYPE_GPIO,
@@ -228,6 +174,7 @@ void app_main()
     };
     
     esp_lcd_panel_io_3wire_spi_config_t io_config = ST7701_PANEL_IO_3WIRE_SPI_CONFIG(line_config, 0);
+    io_config.spi_mode = 3;
     esp_lcd_panel_io_handle_t io_handle = NULL;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_3wire_spi(&io_config, &io_handle));
 
@@ -238,7 +185,7 @@ void app_main()
     // calculate required frame buffer count based on rotation
     esp_lv_adapter_rotation_t rotation = CONFIG_LCD_ROTATION;
     uint8_t num_fbs = esp_lv_adapter_get_required_frame_buffer_count(
-                          /*ESP_LV_ADAPTER_TEAR_AVOID_MODE_DEFAULT_RGB*/ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_FULL, rotation);
+                          ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE, rotation);
 
     esp_lcd_rgb_panel_config_t rgb_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT,
@@ -272,12 +219,12 @@ void app_main()
             .pclk_hz = LCD_PIXEL_CLOCK_HZ,
             .h_res = LCD_H_RES,
             .v_res = LCD_V_RES, 
-            .hsync_back_porch = 10,
-            .hsync_front_porch = 50,
+            .hsync_back_porch = 50,
+            .hsync_front_porch = 10,
             .hsync_pulse_width = 8,
-            .vsync_back_porch = 18,
-            .vsync_front_porch = 8,
-            .vsync_pulse_width = 2,
+            .vsync_back_porch = 20,
+            .vsync_front_porch = 10,
+            .vsync_pulse_width = 8,
             .flags.pclk_active_neg = false, },
         .flags.fb_in_psram = 1,
         .num_fbs = num_fbs,
@@ -325,7 +272,7 @@ void app_main()
                                                          rotation
                                                      );
     
-    //display_config.tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DOUBLE_FULL;
+    display_config.tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE;
                                                      
     lv_display_t *disp = esp_lv_adapter_register_display(&display_config);
     if (disp == NULL) {
@@ -342,21 +289,20 @@ void app_main()
     gpio_set_level(PIN_NUM_BK_LIGHT, LCD_BK_LIGHT_ON_LEVEL);
 #endif
 
-    lv_obj_t *scr = lv_scr_act();  // current screen
-
+    esp_lv_adapter_lock(-1);
+    lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_make(148, 91, 89), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0); 
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    esp_lv_adapter_unlock();
 
     // init emulator
     init_vmacmini_esp32();
     
     // start display on core 1
-    xTaskCreatePinnedToCore(display_task, "display_task", 4096 * 2, NULL, 6, &display_task_hdl, 1);
-    
-    // vsync callback
-    esp_lcd_rgb_panel_event_callbacks_t cbs = { 0 };
-    cbs.on_vsync = panel_vsync_cb;
-    ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(lcd_handle, &cbs, display_task_hdl));
+    BaseType_t display_task_created = xTaskCreatePinnedToCore(
+        display_task, "display_task", 4096 * 2, NULL, 6, NULL, 1);
+    ESP_LOGI(TAG, "Display task creation result=%d, handle=%p",
+             (int)display_task_created, NULL);
         
     // start emulator task with bigger stack
     xTaskCreatePinnedToCore(emulator_task, "emulator_task", 12288, NULL, 5, NULL, 0);       

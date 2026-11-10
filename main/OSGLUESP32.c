@@ -383,15 +383,40 @@ LOCALFUNC blnr Sony_Insert2(char *s)
 LOCALFUNC blnr Sony_InsertIth(int i)
 {
 	blnr v;
+	const char *inserted_name = NULL;
+	char s[] = "disk?.dsk";
+	char dsk_img[] = "disk?.dsk.img";
+	char img[] = "disk?.img";
 
 	if ((i > 9) || ! FirstFreeDisk(nullpr)) {
 		v = falseblnr;
 	} else {
-		char s[] = "disk?.dsk";
-
 		s[4] = '0' + i;
+		dsk_img[4] = '0' + i;
+		img[4] = '0' + i;
 
 		v = Sony_Insert2(s);
+		if (v) {
+			inserted_name = s;
+		}
+		if (!v) {
+			v = Sony_Insert2(dsk_img);
+			if (v) {
+				inserted_name = dsk_img;
+			}
+		}
+		if (!v) {
+			v = Sony_Insert2(img);
+			if (v) {
+				inserted_name = img;
+			}
+		}
+	}
+
+	if (v) {
+		ESP_LOGI(TAG, "Inserted startup disk image: %s", inserted_name);
+	} else if (i == 1) {
+		ESP_LOGW(TAG, "No startup disk image found");
 	}
 
 	return v;
